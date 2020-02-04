@@ -288,12 +288,6 @@ protected:
   hal::SimEnum m_sim_yaw_axis = 0;
   
 
-  //double m_integ_angle = 0.0;
-  // Complementary filter variables
-  //double m_tau = 1.0;
-  //double m_dt, m_alpha = 0.0;
-  
-
  private:
 
   /**
