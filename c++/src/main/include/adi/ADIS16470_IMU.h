@@ -23,6 +23,8 @@
 #include <wpi/mutex.h>
 #include <wpi/condition_variable.h>
 
+#include <hal/SimDevice.h>
+
 namespace frc {
 
 /* ADIS16470 Calibration Time Enum Class */
@@ -270,6 +272,27 @@ class ADIS16470_IMU : public GyroBase {
   IMUAxis m_yaw_axis;
 
   void InitSendable(SendableBuilder& builder) override;
+
+
+protected:
+  // Simulation variables
+  hal::SimDevice m_simDevice;
+  hal::SimEnum m_sim_IMUAxis;
+  hal::SimDouble m_simX;
+  hal::SimDouble m_simY;
+  hal::SimDouble m_simZ;
+
+  hal::SimDouble m_sim_gyro_x, m_sim_gyro_y, m_sim_gyro_z = 0.0;
+  hal::SimDouble m_sim_accel_x, m_sim_accel_y, m_sim_accel_z = 0.0;
+  hal::SimDouble m_sim_compAngleX, m_sim_compAngleY, m_sim_compAngleZ = 0.0;
+  hal::SimEnum m_sim_yaw_axis = 0;
+  
+
+  //double m_integ_angle = 0.0;
+  // Complementary filter variables
+  //double m_tau = 1.0;
+  //double m_dt, m_alpha = 0.0;
+  
 
  private:
 

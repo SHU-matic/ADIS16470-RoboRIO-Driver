@@ -53,8 +53,28 @@ ADIS16470_IMU::ADIS16470_IMU() : ADIS16470_IMU(kZ, SPI::Port::kOnboardCS0, ADIS1
 ADIS16470_IMU::ADIS16470_IMU(IMUAxis yaw_axis, SPI::Port port, ADIS16470CalibrationTime cal_time) : 
                 m_yaw_axis(yaw_axis), 
                 m_spi_port(port),
-                m_calibration_time((uint16_t)cal_time) {
+                m_calibration_time((uint16_t)cal_time),
+                m_simDevice("ADIS16470_IMU", port) 
+{
 
+  if (m_simDevice) {
+    m_sim_IMUAxis = m_simDevice.CreateEnum("IMU Axis", true, {"X", "Y", "Z"}, yaw_axis);
+    m_simX = m_simDevice.CreateDouble("X Accel", false, 0.0);
+    m_simY = m_simDevice.CreateDouble("Y Accel", false, 0.0);
+    m_simZ = m_simDevice.CreateDouble("Z Accel", false, 0.0);
+
+    m_sim_accel_x = m_simDevice.CreateDouble("X Accel", false, 0.0);
+    m_sim_accel_y = m_simDevice.CreateDouble("Y Accel", false, 0.0);
+    m_sim_accel_z = m_simDevice.CreateDouble("Z Accel", false, 0.0);
+
+    m_sim_gyro_x = m_simDevice.CreateDouble("X Gyro", false, 0.0);
+    m_sim_gyro_y = m_simDevice.CreateDouble("Y Gyro", false, 0.0);
+    m_sim_gyro_z = m_simDevice.CreateDouble("Z Gyro", false, 0.0);
+
+    m_sim_compAngleX = m_simDevice.CreateDouble("X Gyro", false, 0.0);
+    m_sim_compAngleY = m_simDevice.CreateDouble("X Gyro", false, 0.0);
+    m_sim_compAngleZ = m_simDevice.CreateDouble("X Gyro", false, 0.0);
+  }
   // Force the IMU reset pin to toggle on startup (doesn't require DS enable)
   // Relies on the RIO hardware by default configuring an output as low
   // and configuring an input as high Z. The 10k pull-up resistor internal to the
@@ -65,33 +85,46 @@ ADIS16470_IMU::ADIS16470_IMU(IMUAxis yaw_axis, SPI::Port port, ADIS16470Calibrat
   new DigitalInput(27);  // Set SPI CS2 (IMU RST) high
   Wait(0.5); // Wait 500ms for reset to complete
 
-  // Configure standard SPI
-  if(!SwitchToStandardSPI()){
-    return;
+  if (!m_simDevice )
+  {
+      // Configure standard SPI
+      if(!SwitchToStandardSPI()){
+        return;
+      }
+    
+
+    // Set IMU internal decimation to 2000 SPS
+    WriteRegister(DEC_RATE, 0x0000);
+    // Set data ready polarity (HIGH = Good Data), gSense Compensation, PoP
+    WriteRegister(MSC_CTRL, 0x0001);
+    // Configure IMU internal Bartlett filter
+    WriteRegister(FILT_CTRL, 0x0002);
+    // Configure continuous bias calibration time based on user setting
+    WriteRegister(NULL_CNFG, m_calibration_time | 0x700);
+
+    // Notify DS that IMU calibration delay is active
+    DriverStation::ReportWarning("ADIS16470 IMU Detected. Starting initial calibration delay.");
+
+    // Wait for samples to accumulate internal to the IMU (110% of user-defined time)
+    Wait(pow(2, m_calibration_time) / 2000 * 64 * 1.1);
+
+    // Write offset calibration command to IMU
+    WriteRegister(GLOB_CMD, 0x0001);
+
+    // Configure and enable auto SPI
+    if(!SwitchToAutoSPI()) {
+      return;
+    }
   }
-
-  // Set IMU internal decimation to 2000 SPS
-  WriteRegister(DEC_RATE, 0x0000);
-  // Set data ready polarity (HIGH = Good Data), gSense Compensation, PoP
-  WriteRegister(MSC_CTRL, 0x0001);
-  // Configure IMU internal Bartlett filter
-  WriteRegister(FILT_CTRL, 0x0002);
-  // Configure continuous bias calibration time based on user setting
-  WriteRegister(NULL_CNFG, m_calibration_time | 0x700);
-
-  // Notify DS that IMU calibration delay is active
-  DriverStation::ReportWarning("ADIS16470 IMU Detected. Starting initial calibration delay.");
-
-  // Wait for samples to accumulate internal to the IMU (110% of user-defined time)
-  Wait(pow(2, m_calibration_time) / 2000 * 64 * 1.1);
-
-  // Write offset calibration command to IMU
-  WriteRegister(GLOB_CMD, 0x0001);
-
-  // Configure and enable auto SPI
-  if(!SwitchToAutoSPI()) {
-    return;
+  else
+  {
+    if(!m_thread_idle) {
+    m_first_run = true;
+    m_thread_active = true;
+    m_acquire_task = std::thread(&ADIS16470_IMU::Acquire, this);
+    std::cout << "New IMU Processing thread activated!" << std::endl;
   }
+  
 
   // Let the user know the IMU was initiallized successfully
   DriverStation::ReportWarning("ADIS16470 IMU Successfully Initialized!");
@@ -278,6 +311,11 @@ int ADIS16470_IMU::ConfigCalTime(ADIS16470CalibrationTime new_cal_time) {
   * themselves. 
  **/
 void ADIS16470_IMU::Calibrate() {
+  if(m_sim)
+  {
+    m_accel_z = 0.0;
+    return;
+  }
   if(!SwitchToStandardSPI()) {
     DriverStation::ReportError("Failed to configure/reconfigure standard SPI.");
   }
@@ -288,6 +326,12 @@ void ADIS16470_IMU::Calibrate() {
 }
 
 int ADIS16470_IMU::SetYawAxis(IMUAxis yaw_axis) {
+  if (m_sim_IMUAxis)
+  {
+    m_yaw_axis = yaw_axis;
+    m_simRange.Set(yaw_axis);
+    return 1;
+  }
   if(m_yaw_axis == yaw_axis)
     return 1; 
   if(!SwitchToStandardSPI()) {
@@ -431,7 +475,11 @@ void ADIS16470_IMU::Acquire() {
     // Sleep loop for 10ms (wait for data)
 	  Wait(.01);
 
-    if (m_thread_active) {
+    if(m_sim_device)
+    {
+      this.Sim_Acquire();
+    }
+    else if (m_thread_active) {
 
       m_thread_idle = false;
 
@@ -552,6 +600,97 @@ void ADIS16470_IMU::Acquire() {
     }
   }
 }
+
+private :
+void ADIS16470_IMU::Sim_Acquire() 
+{
+  if(m_sim_device)
+  {
+    int data_count = 0;
+    int data_remainder = 0;
+    int data_to_read = 0;
+    uint32_t previous_timestamp = 0;
+    double delta_angle = 0.0;
+
+    double gyro_x = m_sim_gyro_x.Get();
+    double gyro_y = m_sim_gyro_y.Get();
+    double gyro_z = m_sim_gyro_z.Get();
+    double accel_x = m_sim_accel_x.Get();
+    double accel_y = m_sim_accel_y.Get();
+    double accel_z = m_sim_accel_z.Get();
+
+    double gyro_x_si = 0.0;
+    double gyro_y_si = 0.0;
+    //double gyro_z_si = 0.0;
+    double accel_x_si = 0.0;
+    double accel_y_si = 0.0;
+    double accel_z_si = 0.0;
+
+    double compAngleX = 0.0;
+    double compAngleY = 0.0;
+    double accelAngleX = 0.0;
+    double accelAngleY = 0.0;
+
+    // Convert scaled sensor data to SI units
+    gyro_x_si = gyro_x * deg_to_rad;
+    gyro_y_si = gyro_y * deg_to_rad;
+    //gyro_z_si = gyro_z * deg_to_rad;
+    accel_x_si = accel_x * grav;
+    accel_y_si = accel_y * grav;
+    accel_z_si = accel_z * grav;
+
+    // Store timestamp for next iteration
+    previous_timestamp = 5;
+
+    delta_angle = (1024 * delta_angle_sf) / (500.0 / (1024 - previous_timestamp));
+
+    m_alpha = m_tau / (m_tau + m_dt);
+
+    if (m_first_run) {
+          accelAngleX = atan2f(accel_x_si, sqrtf((accel_y_si * accel_y_si) + (accel_z_si * accel_z_si)));
+          accelAngleY = atan2f(accel_y_si, sqrtf((accel_x_si * accel_x_si) + (accel_z_si * accel_z_si)));
+          compAngleX = accelAngleX;
+          compAngleY = accelAngleY;
+        }
+        else {
+          // Process X angle
+          accelAngleX = atan2f(accel_x_si, sqrtf((accel_y_si * accel_y_si) + (accel_z_si * accel_z_si)));
+          accelAngleY = atan2f(accel_y_si, sqrtf((accel_x_si * accel_x_si) + (accel_z_si * accel_z_si)));
+          accelAngleX = FormatAccelRange(accelAngleX, accel_z_si);
+          accelAngleY = FormatAccelRange(accelAngleY, accel_z_si);
+          compAngleX = CompFilterProcess(compAngleX, accelAngleX, -gyro_y_si);
+          compAngleY = CompFilterProcess(compAngleY, accelAngleY, gyro_x_si);
+        }
+
+        {
+    // Push data to global variables
+          if(m_first_run) {
+            // Don't accumulate first run. previous_timestamp will be "very" old and the integration will end up way off
+            m_integ_angle = 0.0;
+          }
+          else {
+            m_integ_angle += delta_angle;
+          }
+          m_gyro_x = gyro_x;
+          m_gyro_y = gyro_y;
+          m_gyro_z = gyro_z;
+          m_accel_x = accel_x;
+          m_accel_y = accel_y;
+          m_accel_z = accel_z;
+          m_compAngleX = compAngleX * rad_to_deg;
+          m_compAngleY = compAngleY * rad_to_deg;
+          m_accelAngleX = accelAngleX * rad_to_deg;
+          m_accelAngleY = accelAngleY * rad_to_deg;
+        }
+
+        m_first_run = false;
+
+    
+
+  }  
+}
+
+public: 
 
 /* Complementary filter functions */
 double ADIS16470_IMU::FormatFastConverge(double compAngle, double accAngle) {
