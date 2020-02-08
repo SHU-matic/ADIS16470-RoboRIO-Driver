@@ -470,6 +470,14 @@ void ADIS16470_IMU::Acquire() {
   double accelAngleX = 0.0;
   double accelAngleY = 0.0;
 
+  frc::Timer *pSimTimer = null;
+  if(m_sim_device)
+  {
+    frc::Timer *pSimTimer = new frc::Timer();
+    pSimTimer->Reset();
+    pSimTimer->Start();
+  }
+
   while (true) {
 
     // Sleep loop for 10ms (wait for data)
@@ -477,7 +485,10 @@ void ADIS16470_IMU::Acquire() {
 
     if(m_sim_device)
     {
-      this.Sim_Acquire();
+      if(pSimTimer->HasPeriodPassed	(5.0) )
+        pSimTimer->Reset();
+
+      this.Sim_Acquire(pSimTimer);
     }
     else if (m_thread_active) {
 
@@ -599,6 +610,15 @@ void ADIS16470_IMU::Acquire() {
         accelAngleY = 0.0;
     }
   }
+
+  if (m_sim_device && pTimer != null)
+  {
+    pSimTimer->Reset();
+    SimTimer->Stop();
+    //  destructor delete the pointer to "clean up"
+    delete pTimer; 
+  }
+   
 }
 
 
@@ -750,9 +770,9 @@ private :
   *
   * This function is a simulation version of the Acquire function
  **/
-void ADIS16470_IMU::Sim_Acquire() 
+void ADIS16470_IMU::Sim_Acquire(frc::Timer *pSimTimer) 
 {
-  if(m_sim_device)
+  if (m_sim_device)
   {
     int data_count = 0;
     int data_remainder = 0;
@@ -787,14 +807,9 @@ void ADIS16470_IMU::Sim_Acquire()
     accel_y_si = accel_y * grav;
     accel_z_si = accel_z * grav;
 
-    // Store timestamp for next iteration
-    previous_timestamp = 5 ;
-
-    frc::Timer *pSimTimer = new frc::Timer();
-    pSimTimer->Reset();
-    pSimTimer->Start();
-
     double timeNow = pSimTimer->Get();
+    // Store timestamp for next iteration
+    previous_timestamp = timeNow ;
 
     delta_angle = (1024 * delta_angle_sf) / (500.0 / (1024 - previous_timestamp));
 
@@ -836,14 +851,8 @@ void ADIS16470_IMU::Sim_Acquire()
     m_compAngleY = compAngleY * rad_to_deg;
     m_accelAngleX = accelAngleX * rad_to_deg;
     m_accelAngleY = accelAngleY * rad_to_deg;
-  
 
     m_first_run = false;
-
-  //  destructor delete the pointer to "clean up"
-  delete pTimer;
-
+ 
   }  
 }
-
-public: 
