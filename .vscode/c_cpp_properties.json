@@ -3,16 +3,32 @@
         {
             "name": "Win32",
             "includePath": [
-                "${workspaceFolder}/**"
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/../../../RobotPy/allwpilib/**"
             ],
             "defines": [
                 "_DEBUG",
                 "UNICODE",
-                "_UNICODE"
+                "_UNICODE",
+                "M_PI=3..14159265359"
             ],
             "intelliSenseMode": "msvc-x64",
-            "configurationProvider": "vscode-wpilib"
+            "configurationProvider": "vscode-wpilib",
+
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "C:/Users/seth.urbach/Documents/GitHub/RobotPy/allwpilib/wpilibc/src/main/native/include/frc/",
+                    "C:/Users/seth.urbach/Documents/GitHub/RobotPy/allwpilib/wpilibc/src/main/native/include/frc2/",
+                    "C:/Users/seth.urbach/Documents/GitHub/RobotPy/allwpilib/hal/src/main/native/include"
+                ],
+                "limitSymbolsToIncludedHeaders": true,
+                "databaseFilename": ""
+            },
+            "cStandard": "c11",
+            "cppStandard": "c++17"
         }
     ],
     "version": 4
 }
+

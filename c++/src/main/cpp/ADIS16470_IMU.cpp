@@ -50,18 +50,20 @@ using namespace frc;
  */
 ADIS16470_IMU::ADIS16470_IMU() : ADIS16470_IMU(kZ, SPI::Port::kOnboardCS0, ADIS16470CalibrationTime::_4s) {}
 
-ADIS16470_IMU::ADIS16470_IMU(IMUAxis yaw_axis, SPI::Port port, ADIS16470CalibrationTime cal_time) : 
+ADIS16470_IMU::ADIS16470_IMU(IMUAxis yaw_axis, SPI::Port port, ADIS16470CalibrationTime cal_time) : //, hal::SimDevice simDevice: 
                 m_yaw_axis(yaw_axis), 
                 m_spi_port(port),
-                m_calibration_time((uint16_t)cal_time),
-                m_simDevice("ADIS16470_IMU", port) 
+                m_calibration_time((uint16_t)cal_time)
+                
 {
+
+  m_simDevice = hal::SimDevice("ADIS16470_IMU", port); 
 
   if (m_simDevice) {
     m_sim_IMUAxis = m_simDevice.CreateEnum("IMU Axis", true, {"X", "Y", "Z"}, yaw_axis);
-    m_simX = m_simDevice.CreateDouble("X Accel", false, 0.0);
-    m_simY = m_simDevice.CreateDouble("Y Accel", false, 0.0);
-    m_simZ = m_simDevice.CreateDouble("Z Accel", false, 0.0);
+    // m_simX = m_simDevice.CreateDouble("X Accel", false, 0.0);
+    // m_simY = m_simDevice.CreateDouble("Y Accel", false, 0.0);
+    // m_simZ = m_simDevice.CreateDouble("Z Accel", false, 0.0);
 
     m_sim_accel_x = m_simDevice.CreateDouble("X Accel", false, 0.0);
     m_sim_accel_y = m_simDevice.CreateDouble("Y Accel", false, 0.0);
@@ -74,6 +76,9 @@ ADIS16470_IMU::ADIS16470_IMU(IMUAxis yaw_axis, SPI::Port port, ADIS16470Calibrat
     m_sim_compAngleX = m_simDevice.CreateDouble("X Gyro", false, 0.0);
     m_sim_compAngleY = m_simDevice.CreateDouble("X Gyro", false, 0.0);
     m_sim_compAngleZ = m_simDevice.CreateDouble("X Gyro", false, 0.0);
+
+    m_sim_angle = m_simDevice.CreateDouble("Current Angle", false, 0.0);
+
   }
   // Force the IMU reset pin to toggle on startup (doesn't require DS enable)
   // Relies on the RIO hardware by default configuring an output as low
@@ -116,14 +121,15 @@ ADIS16470_IMU::ADIS16470_IMU(IMUAxis yaw_axis, SPI::Port port, ADIS16470Calibrat
       return;
     }
   }
-  else
+  /* else
   {
-    if(!m_thread_idle) {
-    m_first_run = true;
-    m_thread_active = true;
-    m_acquire_task = std::thread(&ADIS16470_IMU::Acquire, this);
-    std::cout << "New IMU Processing thread activated!" << std::endl;
-  }
+    //ADIS16470_IMU::Sim_Acquire()
+    // if(!m_thread_idle) {
+    // m_first_run = true;
+    // m_thread_active = true;
+    // m_acquire_task = std::thread(&ADIS16470_IMU::Acquire, this);
+     std::cout << "New IMU Processing thread activated!" << std::endl;
+  } */
   
 
   // Let the user know the IMU was initiallized successfully
@@ -311,7 +317,7 @@ int ADIS16470_IMU::ConfigCalTime(ADIS16470CalibrationTime new_cal_time) {
   * themselves. 
  **/
 void ADIS16470_IMU::Calibrate() {
-  if(m_sim)
+  if(m_simDevice)
   {
     m_accel_z = 0.0;
     return;
@@ -328,8 +334,8 @@ void ADIS16470_IMU::Calibrate() {
 int ADIS16470_IMU::SetYawAxis(IMUAxis yaw_axis) {
   if (m_sim_IMUAxis)
   {
+    m_sim_yaw_axis = yaw_axis;
     m_yaw_axis = yaw_axis;
-    m_simRange.Set(yaw_axis);
     return 1;
   }
   if(m_yaw_axis == yaw_axis)
@@ -397,6 +403,8 @@ void ADIS16470_IMU::WriteRegister(uint8_t reg, uint16_t val) {
   * This function resets (zeros) the accumulated (integrated) angle estimates for the xgyro, ygyro, and zgyro outputs.
  **/
 void ADIS16470_IMU::Reset() {
+  if (m_simDevice)
+    m_integ_angle = 0.0;
   std::lock_guard<wpi::mutex> sync(m_mutex);
   m_integ_angle = 0.0;
 }
@@ -470,27 +478,12 @@ void ADIS16470_IMU::Acquire() {
   double accelAngleX = 0.0;
   double accelAngleY = 0.0;
 
-  frc::Timer *pSimTimer = null;
-  if(m_sim_device)
-  {
-    frc::Timer *pSimTimer = new frc::Timer();
-    pSimTimer->Reset();
-    pSimTimer->Start();
-  }
-
   while (true) {
 
     // Sleep loop for 10ms (wait for data)
 	  Wait(.01);
 
-    if(m_sim_device)
-    {
-      if(pSimTimer->HasPeriodPassed	(5.0) )
-        pSimTimer->Reset();
-
-      this.Sim_Acquire(pSimTimer);
-    }
-    else if (m_thread_active) {
+    if (m_thread_active) {
 
       m_thread_idle = false;
 
@@ -611,17 +604,9 @@ void ADIS16470_IMU::Acquire() {
     }
   }
 
-  if (m_sim_device && pTimer != null)
-  {
-    pSimTimer->Reset();
-    SimTimer->Stop();
-    //  destructor delete the pointer to "clean up"
-    delete pTimer; 
-  }
-   
 }
 
-
+/* M_PI is a preprocessor definition; set the value definition in c_cpp_properties.json for VSCode  */
 /* Complementary filter functions */
 double ADIS16470_IMU::FormatFastConverge(double compAngle, double accAngle) {
   if(compAngle > accAngle + M_PI) {
@@ -675,74 +660,139 @@ double ADIS16470_IMU::CompFilterProcess(double compAngle, double accelAngle, dou
   * Z axis. 
  **/
 double ADIS16470_IMU::GetAngle() const {
+  if (m_simDevice)
+  {
+    return m_sim_angle.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_integ_angle;
 }
 
 double ADIS16470_IMU::GetRate() const {
-  std::lock_guard<wpi::mutex> sync(m_mutex);
+  if(m_simDevice)
+  {
     switch (m_yaw_axis) {
-    case kX:
-      return m_gyro_x;
-    case kY:
-      return m_gyro_y;
-    case kZ:
-      return m_gyro_z;
-    default:
-      return 0.0;
+      case kX:
+        return m_sim_gyro_x;
+      case kY:
+        return m_sim_gyro_y;
+      case kZ:
+        return m_sim_gyro_z;
+      default:
+        return 0.0;
+    }
   }
+  else
+  {
+    std::lock_guard<wpi::mutex> sync(m_mutex);
+    switch (m_yaw_axis) {
+      case kX:
+        return m_gyro_x;
+      case kY:
+        return m_gyro_y;
+      case kZ:
+        return m_gyro_z;
+      default:
+        return 0.0;
+    }
+  }  
 }
 
 ADIS16470_IMU::IMUAxis ADIS16470_IMU::GetYawAxis() const {
+  if(m_simDevice)
+  {
+    ADIS16470_IMU::IMUAxis yaw_axis = (ADIS16470_IMU::IMUAxis) m_sim_yaw_axis.Get();
+    return yaw_axis;
+  }
   return m_yaw_axis;
 }
 
 double ADIS16470_IMU::GetGyroInstantX() const {
+  if(m_simDevice)
+  {
+    return m_sim_gyro_x.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_gyro_x;
 }
 
 double ADIS16470_IMU::GetGyroInstantY() const {
+  if(m_simDevice)
+  {
+    return m_sim_gyro_y.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_gyro_y;
 }
 
 double ADIS16470_IMU::GetGyroInstantZ() const {
+  if(m_simDevice)
+  {
+    return m_sim_gyro_z.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_gyro_z;
 }
 
 double ADIS16470_IMU::GetAccelInstantX() const {
+  if(m_simDevice)
+  {
+    return m_sim_accel_x.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_accel_x;
 }
 
 double ADIS16470_IMU::GetAccelInstantY() const {
+  if(m_simDevice)
+  {
+    return m_sim_accel_y.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_accel_y;
 }
 
 double ADIS16470_IMU::GetAccelInstantZ() const {
+  if(m_simDevice)
+  {
+    return m_sim_accel_z.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_accel_z;
 }
 
 double ADIS16470_IMU::GetXComplementaryAngle() const {
+  if(m_simDevice)
+  {
+    return m_sim_compAngleX.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_compAngleX;
 }
 
 double ADIS16470_IMU::GetYComplementaryAngle() const {
+  if(m_simDevice)
+  {
+    return m_sim_compAngleY.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_compAngleY;
 }
 
 double ADIS16470_IMU::GetXFilteredAccelAngle() const {
+  if(m_simDevice)
+  {
+    return m_sim_accelAngleX.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_accelAngleX;
 }
 
 double ADIS16470_IMU::GetYFilteredAccelAngle() const {
+  if(m_simDevice)
+  {
+    return m_sim_accelAngleY.Get();
+  }
   std::lock_guard<wpi::mutex> sync(m_mutex);
   return m_accelAngleY;
 }
@@ -758,101 +808,96 @@ void ADIS16470_IMU::InitSendable(SendableBuilder& builder) {
   builder.SetUpdateTable([=]() {
     nt::NetworkTableEntry(yaw_angle).SetDouble(GetAngle());
   });
+
+
 }
 
 
 
-private :
-/**
-  * @brief  Aquire Simulation sensor values
-  *
-  * @return void
-  *
-  * This function is a simulation version of the Acquire function
- **/
-void ADIS16470_IMU::Sim_Acquire(frc::Timer *pSimTimer) 
-{
-  if (m_sim_device)
-  {
-    int data_count = 0;
-    int data_remainder = 0;
-    int data_to_read = 0;
-    uint32_t previous_timestamp = 0;
-    double delta_angle = 0.0;
+// private :
+// /**
+//   * @brief  Aquire Simulation sensor values
+//   *
+//   * @return void
+//   *
+//   * This function is a simulation version of the Acquire function
+//  **/
+// void ADIS16470_IMU::Sim_Acquire() 
+// {
+//   if (m_simDevice)
+//   {
+//     double delta_angle = m_sim_delta_angle.Get();;
 
-    double gyro_x = m_sim_gyro_x.Get();
-    double gyro_y = m_sim_gyro_y.Get();
-    double gyro_z = m_sim_gyro_z.Get();
-    double accel_x = m_sim_accel_x.Get();
-    double accel_y = m_sim_accel_y.Get();
-    double accel_z = m_sim_accel_z.Get();
+//     double gyro_x = m_sim_gyro_x.Get();
+//     double gyro_y = m_sim_gyro_y.Get();
+//     double gyro_z = m_sim_gyro_z.Get();
+//     double accel_x = m_sim_accel_x.Get();
+//     double accel_y = m_sim_accel_y.Get();
+//     double accel_z = m_sim_accel_z.Get();
 
-    double gyro_x_si = 0.0;
-    double gyro_y_si = 0.0;
-    //double gyro_z_si = 0.0;
-    double accel_x_si = 0.0;
-    double accel_y_si = 0.0;
-    double accel_z_si = 0.0;
+//     double gyro_x_si = 0.0;
+//     double gyro_y_si = 0.0;
+//     //double gyro_z_si = 0.0;
+//     double accel_x_si = 0.0;
+//     double accel_y_si = 0.0;
+//     double accel_z_si = 0.0;
 
-    double compAngleX = 0.0;
-    double compAngleY = 0.0;
-    double accelAngleX = 0.0;
-    double accelAngleY = 0.0;
+//     double compAngleX = 0.0;
+//     double compAngleY = 0.0;
+//     double accelAngleX = 0.0;
+//     double accelAngleY = 0.0;
 
-    // Convert scaled sensor data to SI units
-    gyro_x_si = gyro_x * deg_to_rad;
-    gyro_y_si = gyro_y * deg_to_rad;
-    //gyro_z_si = gyro_z * deg_to_rad;
-    accel_x_si = accel_x * grav;
-    accel_y_si = accel_y * grav;
-    accel_z_si = accel_z * grav;
+//     // Convert scaled sensor data to SI units
+//     gyro_x_si = gyro_x * deg_to_rad;
+//     gyro_y_si = gyro_y * deg_to_rad;
+//     //gyro_z_si = gyro_z * deg_to_rad;
+//     accel_x_si = accel_x * grav;
+//     accel_y_si = accel_y * grav;
+//     accel_z_si = accel_z * grav;
 
-    double timeNow = pSimTimer->Get();
-    // Store timestamp for next iteration
-    previous_timestamp = timeNow ;
+//     //delta_angle = (1024 * delta_angle_sf) / (500.0 / (1024 - previous_timestamp));
 
-    delta_angle = (1024 * delta_angle_sf) / (500.0 / (1024 - previous_timestamp));
+//     m_alpha = m_tau / (m_tau + m_dt);
 
-    m_alpha = m_tau / (m_tau + m_dt);
-
-    if (m_first_run) 
-    {
-      accelAngleX = atan2f(accel_x_si, sqrtf((accel_y_si * accel_y_si) + (accel_z_si * accel_z_si)));
-      accelAngleY = atan2f(accel_y_si, sqrtf((accel_x_si * accel_x_si) + (accel_z_si * accel_z_si)));
-      compAngleX = accelAngleX;
-      compAngleY = accelAngleY;
-    }
-    else {
-      // Process X angle
-      accelAngleX = atan2f(accel_x_si, sqrtf((accel_y_si * accel_y_si) + (accel_z_si * accel_z_si)));
-      accelAngleY = atan2f(accel_y_si, sqrtf((accel_x_si * accel_x_si) + (accel_z_si * accel_z_si)));
-      accelAngleX = FormatAccelRange(accelAngleX, accel_z_si);
-      accelAngleY = FormatAccelRange(accelAngleY, accel_z_si);
-      compAngleX = CompFilterProcess(compAngleX, accelAngleX, -gyro_y_si);
-      compAngleY = CompFilterProcess(compAngleY, accelAngleY, gyro_x_si);
-    }
+//     if (m_first_run) 
+//     {
+//       accelAngleX = atan2f(accel_x_si, sqrtf((accel_y_si * accel_y_si) + (accel_z_si * accel_z_si)));
+//       accelAngleY = atan2f(accel_y_si, sqrtf((accel_x_si * accel_x_si) + (accel_z_si * accel_z_si)));
+//       compAngleX = accelAngleX;
+//       compAngleY = accelAngleY;
+//     }
+//     else {
+//       // Process X angle
+//       accelAngleX = atan2f(accel_x_si, sqrtf((accel_y_si * accel_y_si) + (accel_z_si * accel_z_si)));
+//       accelAngleY = atan2f(accel_y_si, sqrtf((accel_x_si * accel_x_si) + (accel_z_si * accel_z_si)));
+//       accelAngleX = FormatAccelRange(accelAngleX, accel_z_si);
+//       accelAngleY = FormatAccelRange(accelAngleY, accel_z_si);
+//       compAngleX = CompFilterProcess(compAngleX, accelAngleX, -gyro_y_si);
+//       compAngleY = CompFilterProcess(compAngleY, accelAngleY, gyro_x_si);
+//     }
 
         
-    // Push data to global variables
-    if(m_first_run) {
-      // Don't accumulate first run. previous_timestamp will be "very" old and the integration will end up way off
-      m_integ_angle = 0.0;
-    }
-    else {
-      m_integ_angle += delta_angle;
-    }
-    m_gyro_x = gyro_x;
-    m_gyro_y = gyro_y;
-    m_gyro_z = gyro_z;
-    m_accel_x = accel_x;
-    m_accel_y = accel_y;
-    m_accel_z = accel_z;
-    m_compAngleX = compAngleX * rad_to_deg;
-    m_compAngleY = compAngleY * rad_to_deg;
-    m_accelAngleX = accelAngleX * rad_to_deg;
-    m_accelAngleY = accelAngleY * rad_to_deg;
+//     // Push data to global variables
+//     if(m_first_run) {
+//       // Don't accumulate first run. previous_timestamp will be "very" old and the integration will end up way off
+//       m_integ_angle = 0.0;
+//     }
+//     else {
+//       m_integ_angle += delta_angle;
+//     }
+//     m_gyro_x = gyro_x;
+//     m_gyro_y = gyro_y;
+//     m_gyro_z = gyro_z;
+//     m_accel_x = accel_x;
+//     m_accel_y = accel_y;
+//     m_accel_z = accel_z;
+//     m_compAngleX = compAngleX * rad_to_deg;
+//     m_compAngleY = compAngleY * rad_to_deg;
+//     m_accelAngleX = accelAngleX * rad_to_deg;
+//     m_accelAngleY = accelAngleY * rad_to_deg;
 
-    m_first_run = false;
+//     m_first_run = false;
  
-  }  
-}
+//   }  
+
+//}
